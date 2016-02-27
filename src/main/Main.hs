@@ -904,6 +904,9 @@ withBuildConfigExt go@GlobalOpts{..} mbefore inner mafter = do
       let inner'' lk = do
               bconfig <- runStackLoggingTGlobal manager go $
                   lcLoadBuildConfig lc globalCompiler
+
+              runStackTGlobal manager bconfig go Nix.superDerivation
+
               envConfig <-
                  runStackTGlobal
                      manager bconfig go

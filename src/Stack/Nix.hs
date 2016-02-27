@@ -9,6 +9,7 @@ module Stack.Nix
   (reexecWithOptionalShell
   ,nixCmdName
   ,nixHelpOptName
+  ,superDerivation
   ) where
 
 import           Control.Applicative
@@ -22,6 +23,8 @@ import           Control.Monad.Reader (MonadReader,asks)
 import           Control.Monad.Trans.Control (MonadBaseControl)
 import           Data.Char (toUpper)
 import           Data.List (intercalate)
+import           Data.Traversable
+import qualified Data.Map as Map
 import           Data.Maybe
 import           Data.Monoid
 import qualified Data.Text as T
@@ -42,6 +45,69 @@ import           Stack.Types
 import           Stack.Types.Internal
 import           System.Environment (lookupEnv,getArgs,getExecutablePath)
 import           System.Process.Read (getEnvOverride)
+
+import           Stack.Package (findOrGenerateCabalFile, readPackageUnresolved)
+import           Control.Lens ((#), (&), (.~))
+import           Distribution.Nixpkgs.Fetch
+import           Distribution.Nixpkgs.Haskell.Derivation
+import           Distribution.Nixpkgs.Haskell.FromCabal
+import           Distribution.Nixpkgs.Haskell.PackageSourceSpec
+import           Distribution.System (buildPlatform)
+import           Distribution.Compiler (AbiTag(..), buildCompilerId, unknownCompilerInfo)
+import qualified Language.Nix as Nix
+import           Text.PrettyPrint.HughesPJClass (Pretty(pPrint))
+import           Path.Extra (toFilePathNoTrailingSep)
+import           System.Process.Read (unEnvOverride, mkEnvOverride)
+import           Stack.Config (resolvePackageEntry)
+
+superDerivation
+  :: (M env m, HasBuildConfig env)
+  => m ()
+superDerivation = do
+  bconfig <- asks getBuildConfig
+  -- TODO: Resolve git but not GHC
+  let platform = getPlatform bconfig
+
+  env <- unEnvOverride <$> getMinimalEnvOverride
+  menv <- mkEnvOverride platform env
+  packages <-
+    mapM
+      (resolvePackageEntry menv (bcRoot bconfig))
+      (bcPackageEntries bconfig)
+
+  -- liftIO . print $ lcProjectRoot lc
+
+  -- liftIO . print $ bcExtraDeps bconfig
+  forM_ (Map.toList $ bcExtraDeps bconfig) $ \(pname, pver) -> do
+    -- sourceFromHackage
+    pkg <- liftIO $ getPackage Nothing $ Source ("cabal://" ++ packageNameString pname) (versionString pver) UnknownHash
+
+    let deriv = fromGenericPackageDescription (const True)
+          (\i -> Just (Nix.binding # (i, Nix.path # [i])))
+          buildPlatform
+          (unknownCompilerInfo buildCompilerId NoAbiTag)
+          [] -- (readFlagList optFlags)
+          []
+          (pkgCabal pkg)
+          & src .~ pkgSource pkg
+
+    liftIO . print $ pPrint deriv
+
+  forM_ (concat packages) $ \(dir, b) -> do
+    cabalfp <- findOrGenerateCabalFile dir
+    (_, gpkg) <- readPackageUnresolved cabalfp
+
+    let deriv = fromGenericPackageDescription (const True)
+          (\i -> Just (Nix.binding # (i, Nix.path # [i])))
+          buildPlatform
+          (unknownCompilerInfo buildCompilerId NoAbiTag)
+          [] -- (readFlagList optFlags)
+          []
+          gpkg
+          & src .~ (DerivationSource "" (toFilePathNoTrailingSep dir) "" "")
+
+    liftIO $ print b
+    liftIO . print $ pPrint deriv
 
 -- | If Nix is enabled, re-runs the currently running OS command in a Nix container.
 -- Otherwise, runs the inner action.

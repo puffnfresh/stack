@@ -11,6 +11,9 @@ nix:
   enable: false
   packages:
     - zlib
+packages:
+- .
+- ../distribution-nixpkgs
 extra-deps:
 - th-lift-instances-0.1.7
 - th-utilities-0.1.1.0
